@@ -1,20 +1,9 @@
-import puppeteer from "puppeteer";
-import Tesseract from "tesseract.js";
-import { createObjectCsvWriter } from "csv-writer";
+import { createObjectCsvWriter, createObjectCsvStringifier } from "csv-writer";
+import commandLineArgs from "command-line-args";
+import { extractPuppeteer } from "./puppeteerExtractor";
 
-function promiseAwait(millis: number) {
-  return new Promise((resolve, reject) => {
-    setTimeout(resolve, millis);
-  });
-}
-
-const copyFile = "images/hello.png";
-const searchFor = "you+s01+2021";
-const allTexts: { text: string; link: string }[] = [];
-
-async function writeCsv(data: { text: string; link: string }[]) {
-  const writer = createObjectCsvWriter({
-    path: "parsed/out.csv",
+function parseCsvData(data: { text: string; link: string }[]) {
+  const writer = createObjectCsvStringifier({
     header: [
       {
         id: "text",
@@ -27,100 +16,52 @@ async function writeCsv(data: { text: string; link: string }[]) {
     ],
   });
 
-  await writer.writeRecords(data);
+  return writer.stringifyRecords(data);
 }
 
 async function main() {
-  const browser = await puppeteer.launch({ headless: false });
+  const options = commandLineArgs([
+    {
+      name: "search",
+      alias: "s",
+      defaultOption: true,
+    },
+    {
+      name: "fileOutput",
+      alias: "f",
+      type: String,
+    },
+    {
+      name: "headless",
+      alias: "h",
+      type: Boolean,
+      defaultValue: false,
+    },
+    {
+      name: "verbose",
+      alias: "v",
+      type: Boolean,
+      defaultValue: false,
+    },
+  ]);
 
-  const selector = "tr:nth-child(2) img";
-
-  const page = await browser.newPage();
-  await page.goto("https://rarbggo.org/torrents.php");
-
-  await page.waitForSelector(selector);
-
-  // await promiseAwait(10 * 1000);
-
-  // const src = await page.evaluate(
-  //   () => document.querySelectorAll("img")[1].src
-  // );
-
-  await promiseAwait(1000);
-
-  const image = await page.$(selector);
-  if (!image) {
-    console.log("Could not find image");
-    return;
+  if (!options.search) {
+    throw new Error(
+      'Please use "-s <string_to_search>" or "--search <string_to_search>" to seach for a string.'
+    );
   }
 
-  const boundingBox = await image.boundingBox();
-  if (!boundingBox) {
-    console.error("No bounding box");
-    return;
-  }
-  const screenshot = await page.screenshot({
-    path: copyFile,
-    clip: boundingBox,
+  const texts = await extractPuppeteer({
+    closeBrowser: true,
+    searchString: options.search,
+    screenShotLocation: "images/test.png",
   });
 
-  // Parse text in image
+  if (!texts) return;
 
-  const { data } = await Tesseract.recognize(copyFile);
-  const text = data.text.trim();
-  console.log(text);
+  const data = parseCsvData(texts);
 
-  await page.focus("#solve_string");
-  await page.keyboard.type(text + "\n");
-
-  await promiseAwait(3000);
-
-  for (let i = 1; i < 200; i++) {
-    await page.goto(
-      `https://rarbggo.org/torrents.php?search=${searchFor}&page=${i}`
-    );
-
-    const texts = await page.evaluate(() => {
-      return [
-        ...document.querySelectorAll(
-          ".lista2t tr.lista2 > td:nth-child(2) > a:nth-child(1)"
-        ),
-      ].map((el) => {
-        if (el instanceof HTMLAnchorElement)
-          return {
-            text: el.innerText,
-            link: el.href,
-          };
-
-        throw new Error("yes");
-      });
-    });
-
-    if (texts.length === 0) {
-      break;
-    }
-
-    allTexts.push(...texts);
-
-    // const data = await page.$eval(
-    //   ".lista2t tr.lista2 > td:nth-child(2) > a:nth-child(1)",
-    //   (el) => {
-    //     if (el instanceof HTMLAnchorElement)
-    //       return {
-    //         text: el.innerText,
-    //         link: el.href,
-    //       };
-    //   }
-    // );
-
-    console.log(texts);
-  }
-
-  console.log(allTexts);
-
-  writeCsv(allTexts);
-
-  // await browser.close();
+  process.stdout.write(data);
 }
 
 main();
